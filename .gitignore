@@ -1,0 +1,18 @@
+# RocketRide local files
+.rocketride/
+
+# Local AI/editor files
+.claude/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Logs
+*.log

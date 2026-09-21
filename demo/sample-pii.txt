@@ -1,0 +1,1 @@
+John Smith lives at 123 Main Street, Jersey City, NJ. His email is john.smith@example.com, his phone number is 201-555-0198, and his SSN is 123-45-6789.
