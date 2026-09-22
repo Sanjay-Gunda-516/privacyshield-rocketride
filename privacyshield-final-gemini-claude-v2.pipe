@@ -1,0 +1,298 @@
+{
+  "components": [
+    {
+      "id": "webhook_1",
+      "provider": "webhook",
+      "name": "Webhook",
+      "description": "HTTP entry point for plain text and images.",
+      "config": {
+        "hideForm": true,
+        "mode": "Source",
+        "parameters": {},
+        "type": "webhook",
+        "name": "Webhook"
+      },
+      "ui": {
+        "position": {
+          "x": 70,
+          "y": 300
+        },
+        "measured": {
+          "width": 150,
+          "height": 232
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      }
+    },
+    {
+      "id": "parse_1",
+      "provider": "parse",
+      "name": "Parser",
+      "description": "Extracts text and embedded media from incoming document data.",
+      "config": {
+        "name": "Parser"
+      },
+      "ui": {
+        "position": {
+          "x": 390,
+          "y": 270
+        },
+        "measured": {
+          "width": 150,
+          "height": 138
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "tags",
+          "from": "webhook_1"
+        }
+      ]
+    },
+    {
+      "id": "vision_1",
+      "provider": "image_vision_gemini",
+      "name": "Gemini Vision OCR",
+      "description": "Uses Gemini Vision to extract readable text from images.",
+      "config": {
+        "profile": "gemini-3_1-pro-preview",
+        "gemini-2_5-flash": {
+          "apikey": "${ROCKETRIDE_GEMINI_KEY}",
+          "systemPrompt": "You are an OCR extraction component. Accurately transcribe all readable text from the supplied image. Preserve the original wording and useful line breaks. Return only the extracted text with no explanation or commentary.",
+          "prompt": "Extract all readable text from the supplied image.\nPreserve names, addresses, email addresses, phone numbers, dates, IDs, and other visible text exactly as written.\nPreserve useful line breaks.\nReturn only the extracted text. Do not summarize, interpret, redact, or add commentary."
+        },
+        "apikey": "${ROCKETRIDE_GEMINI_KEY}",
+        "vision": {
+          "systemPrompt": "You are an OCR extraction component. Accurately transcribe readable text from the supplied image.",
+          "prompt": "Extract all readable text from this image. Preserve line breaks where useful. Return only the extracted text with no explanation or commentary."
+        },
+        "name": "Gemini Vision OCR",
+        "parameters": {
+          "google": {}
+        },
+        "gemini-3_1-pro-preview": {
+          "apikey": "${ROCKETRIDE_GEMINI_KEY}",
+          "systemPrompt": "You are an OCR extraction component. Accurately transcribe all readable text from the supplied image. Preserve the original wording and useful line breaks. Return only the extracted text with no explanation or commentary.",
+          "prompt": "Extract all readable text from the supplied image.\nPreserve names, addresses, email addresses, phone numbers, dates, IDs, and other visible text exactly as written.\nPreserve useful line breaks.\nReturn only the extracted text. Do not summarize, interpret, redact, or add commentary.\n"
+        }
+      },
+      "ui": {
+        "position": {
+          "x": 690,
+          "y": 500
+        },
+        "measured": {
+          "width": 150,
+          "height": 97
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "image",
+          "from": "webhook_1"
+        },
+        {
+          "lane": "image",
+          "from": "parse_1"
+        }
+      ]
+    },
+    {
+      "id": "ner_1",
+      "provider": "ner",
+      "name": "Named Entity Recognition",
+      "description": "Runs DistilBERT named-entity analysis as a separate branch.",
+      "config": {
+        "profile": "distilbert",
+        "bertLarge": {
+          "aggregation_strategy": "simple",
+          "min_confidence": 0.9,
+          "store_in_metadata": true
+        },
+        "distilbert": {
+          "aggregation_strategy": "simple",
+          "min_confidence": 0.85,
+          "store_in_metadata": true
+        },
+        "name": "Named Entity Recognition"
+      },
+      "ui": {
+        "position": {
+          "x": 930,
+          "y": 160
+        },
+        "measured": {
+          "width": 150,
+          "height": 97
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "text",
+          "from": "parse_1"
+        },
+        {
+          "lane": "text",
+          "from": "vision_1"
+        }
+      ]
+    },
+    {
+      "id": "question_1",
+      "provider": "question",
+      "name": "Redaction Question",
+      "description": "Converts extracted text into the question stream consumed by the redaction prompt.",
+      "config": {
+        "type": "question",
+        "parameters": {
+          "google": {}
+        }
+      },
+      "ui": {
+        "position": {
+          "x": 980,
+          "y": 390
+        },
+        "measured": {
+          "width": 150,
+          "height": 79
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "text",
+          "from": "parse_1"
+        },
+        {
+          "lane": "text",
+          "from": "vision_1"
+        },
+        {
+          "lane": "text",
+          "from": "webhook_1"
+        }
+      ]
+    },
+    {
+      "id": "prompt_1",
+      "provider": "prompt",
+      "name": "PII Redaction Prompt",
+      "description": "Instructs Claude to return only sanitized text.",
+      "config": {
+        "instructions": [
+          "Redact personally identifiable information from the supplied text.",
+          "Mask names, email addresses, phone numbers, street addresses, Social Security numbers, dates of birth, credit-card numbers, bank-account numbers, passport numbers, driver-license numbers, IP addresses, and other clearly sensitive identifiers.",
+          "Replace each sensitive value with [REDACTED]. Preserve all non-sensitive wording, punctuation, and line breaks as closely as possible.",
+          "Return only the redacted text. Do not explain the changes, add headings, warnings, or commentary."
+        ],
+        "name": "PII Redaction Prompt"
+      },
+      "ui": {
+        "position": {
+          "x": 1270,
+          "y": 390
+        },
+        "measured": {
+          "width": 150,
+          "height": 132
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "questions",
+          "from": "question_1"
+        }
+      ]
+    },
+    {
+      "id": "llm_1",
+      "provider": "llm_anthropic",
+      "name": "Claude Redactor",
+      "description": "Uses Claude Sonnet 4.6 for final PII redaction.",
+      "config": {
+        "profile": "claude-sonnet-4-6",
+        "claude-sonnet-4-6": {
+          "apikey": "${ROCKETRIDE_ANTHROPIC_KEY}"
+        },
+        "apikey": "${ROCKETRIDE_ANTHROPIC_KEY}",
+        "extendedThinking": false,
+        "name": "Claude Redactor",
+        "parameters": {
+          "google": {}
+        }
+      },
+      "ui": {
+        "position": {
+          "x": 1560,
+          "y": 390
+        },
+        "measured": {
+          "width": 150,
+          "height": 79
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "questions",
+          "from": "prompt_1"
+        }
+      ]
+    },
+    {
+      "id": "response_1",
+      "provider": "response",
+      "name": "Redacted Response",
+      "description": "Returns sanitized text under redacted_text.",
+      "config": {
+        "profile": "default",
+        "lanes": [
+          {
+            "laneId": "answers",
+            "laneName": "redacted_text"
+          }
+        ],
+        "name": "Redacted Response"
+      },
+      "ui": {
+        "position": {
+          "x": 1750,
+          "y": 400
+        },
+        "measured": {
+          "width": 150,
+          "height": 39
+        },
+        "nodeType": "default",
+        "formDataValid": true
+      },
+      "input": [
+        {
+          "lane": "answers",
+          "from": "llm_1"
+        }
+      ]
+    }
+  ],
+  "project_id": "75cefda4-8b93-48e1-a2e3-829837a198f6",
+  "version": 1,
+  "docRevision": 23,
+  "isLocked": false,
+  "snapToGrid": true,
+  "snapGridSize": [
+    10,
+    10
+  ]
+}

@@ -1,121 +1,106 @@
 # PrivacyShield
 
-PrivacyShield is a small RocketRide project I built to test a practical document-privacy workflow: take in text or an image, extract the readable content, detect sensitive information, and return a redacted version.
+PrivacyShield is a document-privacy workflow built with RocketRide. It accepts plain text or document/image input, extracts readable content when OCR is needed, and returns a sanitized version with personally identifiable information replaced by `[REDACTED]`.
 
-I wanted the project to stay simple enough to understand quickly, while still combining several RocketRide nodes in one end-to-end flow instead of stopping at a basic webhook or chat example.
+I originally built PrivacyShield as a small local proof of concept. After getting that working, I moved the project to RocketRide Cloud and rebuilt the OCR and redaction path around Gemini Vision and Claude. The current version is the cloud pipeline shown below.
 
-## What it does
+## Current architecture
 
-The pipeline handles two main cases:
+```mermaid
+flowchart LR
+    A[Webhook] -->|document data| B[Parser]
+    A -->|image| C[Gemini Vision OCR]
+    B -->|embedded image| C
 
-- plain text sent to the webhook
-- images or scanned content that need OCR first
+    A -->|plain text| E[Redaction Question]
+    B -->|parsed text| E
+    C -->|OCR text| E
 
-From there, the extracted text is passed through PII detection and sensitive values are masked before the result is returned.
+    B -. analysis branch .-> D[Named Entity Recognition<br/>DistilBERT]
+    C -. analysis branch .-> D
+
+    E --> F[PII Redaction Prompt]
+    F --> G[Claude Redactor<br/>Claude Sonnet 4.6]
+    G --> H[Redacted Response<br/>redacted_text]
+```
+
+The important design choice is that Named Entity Recognition stays on a separate analysis branch. The final redaction path works directly with the text coming from the webhook, parser, or Gemini OCR instead of routing NER output into the response path.
+
+## How it works
+
+PrivacyShield supports two main input paths.
+
+For plain text, the webhook can pass the text into the redaction flow directly. For images or document content that needs OCR, Gemini Vision first transcribes the visible text. The extracted text is then converted into the question format expected by the prompt and passed to Claude for redaction.
+
+The redaction prompt asks Claude to mask sensitive values such as names, email addresses, phone numbers, street addresses, Social Security numbers, dates of birth, financial identifiers, passport or driver-license numbers, IP addresses, and other clearly sensitive identifiers. Sensitive values are replaced with `[REDACTED]` while the surrounding wording and useful line breaks are preserved as closely as possible.
+
+The final Response node exposes the sanitized result as `redacted_text`.
+
+## Main components
+
+| Component | Role |
+| --- | --- |
+| **Webhook** | Entry point for text and image/document input |
+| **Parser** | Extracts text and embedded media from incoming document data |
+| **Gemini Vision OCR** | Extracts readable text from images using `gemini-3_1-pro-preview` |
+| **Named Entity Recognition** | Runs DistilBERT entity analysis as a separate branch |
+| **Redaction Question** | Converts extracted text into the question stream used by the prompt |
+| **PII Redaction Prompt** | Defines what should be treated as sensitive and how the output should be formatted |
+| **Claude Redactor** | Performs the final redaction using Claude Sonnet 4.6 |
+| **Redacted Response** | Returns the sanitized result under `redacted_text` |
+
+The NER node currently uses a minimum confidence of `0.85` and stores detected entities in metadata. It is useful for analysis, but it does not control the final redacted response.
+
+## Pipeline file
+
+The current cloud pipeline is:
 
 ```text
-                           ┌───────────────┐
-                         ┌→│ NER (BERT)    │
-                         │ └───────────────┘
-                         │
-Webhook → Parser ─────────┼→ PII Anonymizer → Response
-    │                    │
-    └────────→ OCR ──────┘
+privacyshield-final-gemini-claude-v2.pipe
 ```
 
-The NER node is kept as a separate analysis branch. The redaction path uses parsed or OCR text directly.
+The model credentials are referenced through environment variables rather than hard-coded API keys:
 
-## Why I structured it this way
-
-My first version sent NER output directly into the anonymizer. While testing, I noticed the response text was being duplicated.
-
-I used RocketRide's Trace view to narrow it down. The NER input was 153 characters, but the anonymizer was sending 306 characters to the response. I changed the flow so Parser and OCR feed the anonymizer directly and kept NER as a separate analysis branch. After that, the duplicate output disappeared.
-
-That debugging step ended up being one of the most useful parts of the project because it forced me to understand how data was actually moving through the pipeline instead of just connecting nodes until it worked.
-
-## Main nodes
-
-- **Webhook** — receives the incoming request
-- **Parser** — extracts content from incoming data
-- **OCR** — reads text from images and scanned content
-- **Named Entity Recognition** — runs BERT-based entity analysis
-- **PII Anonymizer** — masks sensitive information
-- **Response** — returns the redacted text to the caller
-
-For the working version I used:
-
-- BERT Base for NER
-- GLiNER Multi PII for PII detection
-- EasyOCR for English OCR
-- `█` as the masking character
-
-## Running it locally
-
-1. Open `privacyshield.pipe` in VS Code.
-2. Make sure the RocketRide local engine is connected.
-3. Start the Webhook node.
-4. Open **Endpoint Info**.
-5. Copy the current webhook URL and public authorization key.
-6. Use those values in one of the test commands below.
-
-Do not commit or share generated endpoint credentials.
-
-### Plain-text test
-
-```bash
-curl -X POST "YOUR_WEBHOOK_URL" \
-  -H "Authorization: Bearer YOUR_PUBLIC_AUTH_KEY" \
-  -H "Content-Type: text/plain" \
-  --data-binary 'John Smith lives at 123 Main Street, Jersey City, NJ. His email is john.smith@example.com, his phone number is 201-555-0198, and his SSN is 123-45-6789.'
+```text
+ROCKETRIDE_GEMINI_KEY
+ROCKETRIDE_ANTHROPIC_KEY
 ```
 
-The response should return `status: OK` and a `redacted_text` field with the detected PII masked.
+Do not commit generated endpoint credentials, task tokens, or real API keys.
 
-### OCR test
+## Project evolution
 
-A fictional patient-intake image is included here:
+The first version of PrivacyShield was a local RocketRide proof of concept built around Parser, EasyOCR, BERT/GLiNER-based analysis, a PII Anonymizer, and a Response node.
+
+During that version I found a duplicate-output problem after routing NER output into the anonymizer. RocketRide's Trace view made the issue clear: text was being repeated between stages. I changed the design so entity recognition remained a separate analysis branch and the redaction path received the extracted text directly.
+
+When I moved the project to RocketRide Cloud, the original model-based anonymizer and legacy OCR path were not reliable in that environment. I rebuilt the cloud version around Gemini Vision OCR and Claude redaction instead of trying to force the local implementation to behave the same way in Cloud.
+
+That change also made the responsibilities of the pipeline clearer: OCR extracts text, NER analyzes it independently, and Claude handles the final sanitization.
+
+## Testing
+
+I tested the current cloud pipeline with a fictional patient-intake image containing deliberately fake PII.
+
+The test document includes examples such as a patient name, email address, phone number, street address, Social Security number, and date of birth. Gemini Vision extracted the text from the image and the Claude redaction path returned a sanitized version with those values replaced by `[REDACTED]`.
+
+The sample file is included in:
 
 ```text
 demo/privacyshield-ocr-test.png
 ```
 
-Run:
+For a running RocketRide task, I used the RocketRide upload command:
 
 ```bash
-curl -X POST "YOUR_WEBHOOK_URL" \
-  -H "Authorization: Bearer YOUR_PUBLIC_AUTH_KEY" \
-  -H "Content-Type: image/png" \
-  --data-binary "@demo/privacyshield-ocr-test.png"
+rocketride upload \
+  --token "$RR_TASK_TOKEN" \
+  ./demo/privacyshield-ocr-test.png
 ```
 
-This sends the image through OCR first, then through the PII redaction flow.
-
-## What I tested
-
-I tested both of these locally:
-
-```text
-Plain text → Webhook → Parser → PII Anonymizer → Response
-Image → Webhook → OCR → PII Anonymizer → Response
-```
-
-Both returned successful responses and masked sensitive values in the output.
-
-The OCR test uses fictional data only.
-
-## Open-source contribution
-
-Alongside building PrivacyShield, I also picked up [rocketride-server issue #1911](https://github.com/rocketride-org/rocketride-server/issues/1911).
-
-The issue is in the Anthropic LLM integration. The current thinking configuration can fall back to an older `budget_tokens` request shape for newer Claude profiles, which causes an HTTP 400 when the node runs.
-
-I am working through the existing implementation and tests so the fix can support the newer thinking configuration without changing expected behavior for older models.
-
-Once the pull request is submitted, I will add the PR link here.
+The test data in this repository is fictional and is intended only for OCR and PII-redaction validation.
 
 ## Demo
-
-The screenshots below show the working pipeline, the fictional OCR test document, and the redacted output returned by the pipeline.
 
 ### Pipeline
 
@@ -133,17 +118,32 @@ The screenshots below show the working pipeline, the fictional OCR test document
 
 [Watch the PrivacyShield demo on YouTube](https://youtu.be/JusZOfXtvbo)
 
-## Things I would improve next
+## Open-source contribution
 
-The current version is a proof of concept, not something I would use as-is for production data.
+While building PrivacyShield, I also worked on [rocketride-server issue #1453](https://github.com/rocketride-org/rocketride-server/issues/1453), which covers unprotected `sessionStorage` access in browser environments where storage can be blocked or throw an exception.
 
-A few next steps I would take:
+I submitted [PR #2385 — `fix(ui): guard sessionStorage access in privacy-restricted browsers`](https://github.com/rocketride-org/rocketride-server/pull/2385).
 
-- add deterministic checks for formats like email addresses and SSNs
-- build a larger evaluation set with different document layouts
-- measure missed detections and false positives
-- test lower-quality scans and rotated images
-- add a small frontend so a user can upload a file and preview the redacted result
-- deploy the pipeline behind a secured endpoint
+The change adds safe `sessionStorage` helpers and applies them to authentication/bootstrap and PKCE-related paths so restricted storage access can fail harmlessly instead of crashing application startup. Regression coverage was also added for normal storage behavior and failure cases.
 
-One thing I noticed during testing is that model-based redaction can sometimes mask only part of an email address. That is exactly the kind of case where I would add a deterministic fallback rule in a production version.
+The pull request is currently under review.
+
+## Next step: RocketRide App
+
+The working cloud pipeline is the backend of PrivacyShield. The next stage is to package it as a RocketRide App with a small user-facing interface for submitting text or documents and viewing the redacted result.
+
+That App version will keep the pipeline focused on the processing work while the UI handles input, progress, and result presentation. After the app is packaged and verified, the goal is to submit a version through RocketRide's App publishing/review flow.
+
+## What I would improve next
+
+PrivacyShield is still a proof of concept, not a production system for real sensitive data. The next improvements I would focus on are:
+
+- add deterministic validation for structured identifiers such as email addresses and SSNs
+- build a larger evaluation set across different document layouts and scan quality
+- measure false positives and missed detections
+- test rotated, low-resolution, and noisy document images
+- add automated regression cases for the redaction prompt
+- build the RocketRide App interface around the working cloud pipeline
+- add clearer handling for unsupported files and model/API failures
+
+One lesson from this project is that a privacy workflow should not depend on a single model behaving perfectly. A production version should combine model-based detection with deterministic checks, evaluation, and clear failure handling.
